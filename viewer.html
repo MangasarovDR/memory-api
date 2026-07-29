@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memory Viewer</title>
+<style>
+:root {
+  --bg:       #0D0F17;
+  --surface:  #161824;
+  --surface2: #1E2133;
+  --border:   #252840;
+  --text:     #DDE2F0;
+  --muted:    #5C6280;
+  --accent:   #818CF8;
+  --accent-d: #4F46E5;
+
+  --t-user:      #60A5FA;
+  --t-feedback:  #FBBF24;
+  --t-project:   #34D399;
+  --t-reference: #A78BFA;
+  --t-user-bg:      rgba(96,165,250,.12);
+  --t-feedback-bg:  rgba(251,191,36,.12);
+  --t-project-bg:   rgba(52,211,153,.12);
+  --t-reference-bg: rgba(167,139,250,.12);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:       #F0F2FA;
+    --surface:  #FFFFFF;
+    --surface2: #E8EAF6;
+    --border:   #D0D5EF;
+    --text:     #1A1D35;
+    --muted:    #717AA0;
+    --accent:   #4F46E5;
+    --accent-d: #3730A3;
+  }
+}
+:root[data-theme="light"] {
+  --bg:       #F0F2FA;
+  --surface:  #FFFFFF;
+  --surface2: #E8EAF6;
+  --border:   #D0D5EF;
+  --text:     #1A1D35;
+  --muted:    #717AA0;
+  --accent:   #4F46E5;
+  --accent-d: #3730A3;
+}
+:root[data-theme="dark"] {
+  --bg:       #0D0F17;
+  --surface:  #161824;
+  --surface2: #1E2133;
+  --border:   #252840;
+  --text:     #DDE2F0;
+  --muted:    #5C6280;
+  --accent:   #818CF8;
+  --accent-d: #4F46E5;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* TOPBAR */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.topbar-row1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.logo {
+  font-size: .75rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.search-wrap {
+  flex: 1;
+  min-width: 180px;
+  position: relative;
+}
+.search-wrap svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+#search {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px 7px 34px;
+  color: var(--text);
+  font-size: .875rem;
+  outline: none;
+  transition: border-color .15s;
+}
+#search:focus { border-color: var(--accent); }
+#search::placeholder { color: var(--muted); }
+
+.key-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  color: var(--muted);
+  font-size: .8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+.key-btn:hover { border-color: var(--accent); color: var(--accent); }
+.key-btn.has-key { color: var(--t-project); border-color: var(--t-project); }
+
+.theme-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .875rem;
+  line-height: 1;
+  transition: border-color .15s;
+}
+.theme-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.topbar-row2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.filter-chip {
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: .75rem;
+  cursor: pointer;
+  background: none;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: .02em;
+  transition: all .15s;
+}
+.filter-chip:hover { color: var(--text); border-color: var(--text); }
+.filter-chip.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.filter-chip[data-type="user"].active      { background: var(--t-user); border-color: var(--t-user); }
+.filter-chip[data-type="feedback"].active  { background: var(--t-feedback); border-color: var(--t-feedback); color: #1a1000; }
+.filter-chip[data-type="project"].active   { background: var(--t-project); border-color: var(--t-project); color: #001a10; }
+.filter-chip[data-type="reference"].active { background: var(--t-reference); border-color: var(--t-reference); }
+
+.count-label {
+  margin-left: auto;
+  font-size: .75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* GRID */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+  padding: 20px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color .15s, transform .1s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.card-slug {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: .775rem;
+  color: var(--accent);
+  flex: 1;
+  word-break: break-all;
+}
+.type-badge {
+  flex-shrink: 0;
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+.badge-user      { color: var(--t-user);      background: var(--t-user-bg); }
+.badge-feedback  { color: var(--t-feedback);  background: var(--t-feedback-bg); }
+.badge-project   { color: var(--t-project);   background: var(--t-project-bg); }
+.badge-reference { color: var(--t-reference); background: var(--t-reference-bg); }
+
+.card-desc {
+  font-size: .825rem;
+  color: var(--text);
+  font-weight: 500;
+}
+.card-body {
+  font-size: .775rem;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.card.expanded .card-body {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: pre-wrap;
+}
+.card-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.tag {
+  font-size: .65rem;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--surface2);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* EMPTY / LOADING */
+.state-msg {
+  grid-column: 1/-1;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: .875rem;
+}
+.state-msg strong { display: block; font-size: 1.1rem; margin-bottom: 8px; color: var(--text); }
+
+/* MODAL */
+.modal-bg {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.modal-bg.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  width: min(420px, calc(100vw - 40px));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.modal h2 { font-size: 1rem; font-weight: 600; }
+.modal p  { font-size: .825rem; color: var(--muted); }
+.modal input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: .825rem;
+  outline: none;
+}
+.modal input:focus { border-color: var(--accent); }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 20px;
+  font-size: .875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.btn-primary:hover { opacity: .85; }
+.btn-secondary {
+  background: var(--surface2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: .875rem;
+  cursor: pointer;
+}
+.btn-secondary:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-row1">
+    <span class="logo">Memory API</span>
+    <div class="search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input id="search" type="search" placeholder="Поиск по slug, описанию, тексту…" autocomplete="off">
+    </div>
+    <button class="key-btn" id="keyBtn" onclick="openModal()">🔑 API ключ</button>
+    <button class="theme-btn" id="themeBtn" title="Тема">🌗</button>
+  </div>
+  <div class="topbar-row2">
+    <button class="filter-chip active" data-type="all">Все</button>
+    <button class="filter-chip" data-type="user">User</button>
+    <button class="filter-chip" data-type="feedback">Feedback</button>
+    <button class="filter-chip" data-type="project">Project</button>
+    <button class="filter-chip" data-type="reference">Reference</button>
+    <span class="count-label" id="countLabel"></span>
+  </div>
+</div>
+
+<div class="grid" id="grid">
+  <div class="state-msg"><strong>Нет подключения</strong>Введи API ключ, чтобы загрузить воспоминания</div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h2 id="modalTitle">API ключ</h2>
+    <p>Ключ сохраняется в localStorage браузера — вводить повторно не нужно.</p>
+    <input type="password" id="keyInput" placeholder="Bearer-токен…" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Отмена</button>
+      <button class="btn-primary" onclick="saveKey()">Сохранить и загрузить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';   // same origin
+let all = [];
+let activeType = 'all';
+let searchQ = '';
+
+// Theme
+function getTheme() { return localStorage.getItem('mv-theme') || 'dark'; }
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('themeBtn').textContent = t === 'dark' ? '🌗' : '☀️';
+}
+applyTheme(getTheme());
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const next = getTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('mv-theme', next);
+  applyTheme(next);
+});
+
+// Key
+function getKey() { return localStorage.getItem('mv-key') || ''; }
+function openModal() {
+  document.getElementById('keyInput').value = getKey();
+  document.getElementById('modalBg').classList.add('open');
+  setTimeout(() => document.getElementById('keyInput').focus(), 50);
+}
+function closeModal() { document.getElementById('modalBg').classList.remove('open'); }
+function saveKey() {
+  const k = document.getElementById('keyInput').value.trim();
+  if (!k) return;
+  localStorage.setItem('mv-key', k);
+  closeModal();
+  updateKeyBtn();
+  loadData();
+}
+function updateKeyBtn() {
+  const btn = document.getElementById('keyBtn');
+  btn.classList.toggle('has-key', !!getKey());
+  btn.textContent = getKey() ? '🔑 Ключ задан' : '🔑 API ключ';
+}
+document.getElementById('modalBg').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('keyInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveKey();
+  if (e.key === 'Escape') closeModal();
+});
+
+// Load
+async function loadData() {
+  const key = getKey();
+  if (!key) return;
+  showLoading();
+  try {
+    const resp = await fetch(`${API}/memories?limit=500`, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+    if (resp.status === 401) { showError('Неверный ключ — обнови его'); return; }
+    if (!resp.ok) { showError(`Ошибка ${resp.status}`); return; }
+    all = await resp.json();
+    render();
+  } catch (e) {
+    showError('Нет соединения с API');
+  }
+}
+
+function showLoading() {
+  document.getElementById('grid').innerHTML = '<div class="state-msg"><strong>Загрузка…</strong></div>';
+}
+function showError(msg) {
+  document.getElementById('grid').innerHTML = `<div class="state-msg"><strong>Ошибка</strong>${msg}</div>`;
+}
+
+// Filter + render
+function filtered() {
+  return all.filter(m => {
+    if (activeType !== 'all' && m.type !== activeType) return false;
+    if (searchQ) {
+      const q = searchQ.toLowerCase();
+      const hay = [m.slug, m.description, m.body_md, ...(m.tags || [])].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function render() {
+  const list = filtered();
+  document.getElementById('countLabel').textContent = `${list.length} / ${all.length}`;
+  const grid = document.getElementById('grid');
+  if (!list.length) {
+    grid.innerHTML = '<div class="state-msg"><strong>Ничего не найдено</strong>Измени фильтр или поисковый запрос</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  list.forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.tabIndex = 0;
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="card-slug">${esc(m.slug)}</span>
+        <span class="type-badge badge-${esc(m.type)}">${esc(m.type)}</span>
+      </div>
+      <div class="card-desc">${esc(m.description || '')}</div>
+      <div class="card-body">${esc(m.body_md || '')}</div>
+      ${m.tags && m.tags.length ? `<div class="card-tags">${m.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+    `;
+    card.addEventListener('click', () => card.classList.toggle('expanded'));
+    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') card.classList.toggle('expanded'); });
+    grid.appendChild(card);
+  });
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Chips
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    activeType = chip.dataset.type;
+    render();
+  });
+});
+
+// Search
+let searchTimer;
+document.getElementById('search').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { searchQ = e.target.value.trim(); render(); }, 200);
+});
+
+// Init
+updateKeyBtn();
+if (getKey()) loadData();
+else openModal();
+</script>
+</body>
+</html>

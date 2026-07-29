@@ -1,0 +1,12 @@
+services:
+  memory-api:
+    build: .
+    container_name: memory-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./data:/data
+      - ./models:/root/.cache/fastembed
+    env_file:
+      - .env
