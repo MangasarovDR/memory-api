@@ -545,10 +545,19 @@ def export_memories(db: sqlite3.Connection = Depends(get_db)):
     return "\n".join(lines)
 
 
+# Сколько мест в ответе всегда оставляем второму и третьему ярусу, когда в
+# запросе есть текст. Без этой брони always-load съедал ответ целиком: ярусов
+# было три, а работал один. 22.08.2026 при потолке 20 и 221 записи importance>=4
+# семантика не получала НИ ОДНОГО места — поиск был мёртв, и заметить это было
+# нельзя, потому что ответ выглядел полным.
+SEARCH_RESERVE = 10   # при потолке 100 и ярусе ~89 обрезать не приходится вовсе:
+                      # поиск получает свои места из остатка, а не за чей-то счёт
+
+
 @app.get("/memories/context", dependencies=[Depends(require_auth)])
 def smart_context(
     message: str = Query(""),
-    limit:   int = Query(20, le=50),
+    limit:   int = Query(100, le=200),
     db: sqlite3.Connection = Depends(get_db),
 ):
     """
@@ -556,10 +565,17 @@ def smart_context(
     1. Always-load: importance >= 4 (core profile + rules)
     2. Semantic: ANN search via vec_memories (if embedder ready)
     3. Keyword FTS5 fallback / supplement
+
+    Если always-load не влезает в потолок, лишнее отрезается — но по СВЕЖЕСТИ,
+    а не как придётся. Ответ всегда сообщает `always_total` и `truncated`:
+    молча терять записи, объявленные «всегда в контексте», нельзя — именно так
+    это и пряталось до 22.08.2026.
     """
-    # Tier 1 — always load
+    # Tier 1 — always load. Порядок решает, кто уцелеет при обрезке: сначала
+    # важность, потом свежесть. Прежняя сортировка по типу отрезала произвольно.
     always_rows = db.execute(
-        "SELECT * FROM memories WHERE importance >= 4 ORDER BY importance DESC, type"
+        "SELECT * FROM memories WHERE importance >= 4 "
+        "ORDER BY importance DESC, updated_at DESC"
     ).fetchall()
     seen_ids = {r["id"] for r in always_rows}
 
@@ -587,11 +603,26 @@ def smart_context(
         except sqlite3.OperationalError:
             pass
 
-    budget = limit - len(always_rows)
-    combined  = [_row_to_dict(r, db) for r in always_rows]
+    always_total = len(always_rows)
+    # Броню отдаём поиску только когда есть что искать: на пустом сообщении
+    # ярусы 2 и 3 пусты, и резервировать под них места значит выбросить
+    # always-load ни за чем.
+    reserve = SEARCH_RESERVE if (message.strip() and (semantic_rows or keyword_rows)) else 0
+    keep = max(limit - reserve, 0) if always_total > limit - reserve else always_total
+
+    combined  = [_row_to_dict(r, db) for r in always_rows[:keep]]
+    budget = limit - len(combined)
     combined += semantic_rows[:max(0, budget - 3)]   # уже словари из _semantic_search
     combined += [_row_to_dict(r, db) for r in keyword_rows[:3]]
-    return {"memories": combined[:limit], "total": len(combined)}
+    combined = combined[:limit]
+    dropped = always_total - keep
+    if dropped:
+        logger.warning(
+            "context: always-load %d записей при потолке %d, отрезано %d "
+            "(проредить importance — /opt/memory-api/scripts/prune_importance.py)",
+            always_total, limit, dropped)
+    return {"memories": combined, "total": len(combined),
+            "always_total": always_total, "truncated": dropped}
 
 
 @app.get("/memories/search", dependencies=[Depends(require_auth)])

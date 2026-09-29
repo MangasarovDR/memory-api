@@ -23,7 +23,10 @@ def api_get(path: str):
         return json.loads(r.read())
 
 
-def tg_send(text: str):
+TG_LIMIT = 4096
+
+
+def _tg_send_one(text: str):
     data = json.dumps({
         "chat_id": ALLOWED_USER_ID,
         "text": text,
@@ -39,26 +42,112 @@ def tg_send(text: str):
         return json.loads(r.read())
 
 
+def tg_send(text: str):
+    """Дайджест не обрезаем — если не влезает в лимит Telegram, режем на части по строкам."""
+    if len(text) <= TG_LIMIT:
+        return _tg_send_one(text)
+
+    chunks, cur = [], ""
+    for line in text.split("\n"):
+        # Одна строка длиннее лимита — разрезаем жёстко, иначе она не отправится вообще
+        while len(line) > TG_LIMIT:
+            if cur:
+                chunks.append(cur); cur = ""
+            chunks.append(line[:TG_LIMIT]); line = line[TG_LIMIT:]
+        if len(cur) + len(line) + 1 > TG_LIMIT:
+            chunks.append(cur); cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        chunks.append(cur)
+
+    res = None
+    for n, chunk in enumerate(chunks, 1):
+        suffix = f"\n\n<i>(часть {n} из {len(chunks)})</i>" if len(chunks) > 1 else ""
+        res = _tg_send_one(chunk + suffix)
+    return res
+
+
 PRIORITY_LABEL = {5: "🔴", 4: "🟠", 3: "🟡", 2: "🔵", 1: "⚪"}
 STATUS_ICON    = {"pending": "○", "in_progress": "▶", "done": "✓", "cancelled": "✗"}
 
+# Порядок квадрантов при сортировке — вторичный ключ после приоритета.
+QUADRANT_ORDER = {
+    "важное-срочное":     0,
+    "важное-несрочное":   1,
+    "неважное-срочное":   2,
+    "неважное-несрочное": 3,
+}
 
-def fmt_todo(t: dict, show_time: bool = False, show_quadrant: bool = True) -> str:
+
+def sort_todos(todos: list) -> list:
+    """Сначала приоритет (5 → 1), внутри приоритета — по матрице Эйзенхауэра."""
+    def key(t):
+        q = t.get("quadrant") or {}
+        return (
+            -int(t.get("priority") or 3),
+            QUADRANT_ORDER.get(q.get("key"), 4),
+            t.get("due_at") or "9999",
+            t.get("id") or 0,
+        )
+    return sorted(todos, key=key)
+
+
+_MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн",
+           "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def human_due(t: dict) -> str:
+    """ISO-дата → человеческая: «сегодня 12:00», «вчера», «3 авг»."""
+    raw = t.get("due_at")
+    if not raw:
+        return ""
+    try:
+        d = datetime.fromisoformat(raw.replace("T", " "))
+    except ValueError:
+        return raw[:16]
+    delta = (d.date() - datetime.now().date()).days
+    if delta == 0:
+        day = "сегодня"
+    elif delta == 1:
+        day = "завтра"
+    elif delta == -1:
+        day = "вчера"
+    elif d.year == datetime.now().year:
+        day = f"{d.day} {_MONTHS[d.month - 1]}"
+    else:
+        day = f"{d.day} {_MONTHS[d.month - 1]} {d.year}"
+    return f"{day} {d:%H:%M}" if t.get("has_time") else day
+
+
+def fmt_todo(t: dict, show_due: bool = False, show_quadrant: bool = True) -> str:
+    """Одна задача — одна строка: статус, приоритет, квадрант · название · срок · теги · id."""
     icon = PRIORITY_LABEL.get(t.get("priority", 3), "🟡")
     status = STATUS_ICON.get(t.get("status", "pending"), "○")
-    title = t["title"][:60]
-    time_str = ""
-    if show_time and t.get("due_at") and t.get("has_time"):
-        try:
-            dt = datetime.fromisoformat(t["due_at"])
-            time_str = f" <code>{dt.strftime('%H:%M')}</code>"
-        except ValueError:
-            pass
     quad = ""
     if show_quadrant:
         q = t.get("quadrant")
-        quad = f" {q['icon']}" if q else " ❔"
-    return f"{status} {icon} {title}{quad}{time_str}"
+        quad = q["icon"] if q else "❔"
+
+    parts = [f"{status} {icon}{quad} {t['title']}"]
+    if show_due:
+        due = human_due(t)
+        if due:
+            parts.append(f"<b>{due}</b>")
+    tags = t.get("tags") or []
+    if tags:
+        parts.append(" ".join(f"#{x}" for x in tags))
+    parts.append(f"id {t['id']}")
+    return " · ".join(parts)
+
+
+# --- Временная шпаргалка (удалить этот блок и его вставки, когда запомнится) ---
+CHEATSHEET = (
+    "\n\n──────────\n"
+    "🖥️ <b>tmux — шпаргалка</b>\n"
+    "Старт новой:\n<code>tmux new -s claude</code>\n"
+    "Продолжить (с любого устройства):\n<code>tmux attach -d -t claude</code>"
+)
 
 
 def main():
@@ -68,74 +157,69 @@ def main():
 
     data = api_get("/todos/today")
     date = data.get("date", "?")
+    # «По времени» остаётся хронологическим — это расписание дня.
+    # Остальные блоки — по приоритету, внутри приоритета по матрице.
     scheduled    = data.get("scheduled", [])
-    today_no_time= data.get("today_no_time", [])
-    overdue      = data.get("overdue", [])
-    anytime      = data.get("anytime", [])
+    today_no_time= sort_todos(data.get("today_no_time", []))
+    overdue      = sort_todos(data.get("overdue", []))
+    anytime      = sort_todos(data.get("anytime", []))
 
     total = len(scheduled) + len(today_no_time) + len(overdue)
 
     if total == 0 and not anytime:
-        tg_send(f"☀️ <b>Доброе утро!</b> На сегодня ({date}) задач нет.")
+        tg_send(f"☀️ <b>Доброе утро!</b> На сегодня ({date}) задач нет." + CHEATSHEET)
         return
 
     lines = [f"☀️ <b>Доброе утро! План на {date}</b>\n"]
     shown_ids: set = set()   # чтобы понедельничный блок не дублировал вывод выше
 
     if overdue:
-        lines.append(f"⚠️ <b>Просрочено ({len(overdue)}):</b>")
-        for t in overdue[:5]:
-            due = t.get("due_at", "")[:10]
-            lines.append(f"  {fmt_todo(t)} <i>({due})</i>")
+        lines.append(f"⚠️ <b>Просрочено — {len(overdue)}</b>")
+        for t in overdue:
+            lines.append(fmt_todo(t, show_due=True))
             shown_ids.add(t["id"])
-        if len(overdue) > 5:
-            lines.append(f"  ...ещё {len(overdue)-5}")
         lines.append("")
 
     if scheduled:
-        lines.append(f"🕐 <b>По времени ({len(scheduled)}):</b>")
+        lines.append(f"🕐 <b>По времени — {len(scheduled)}</b>")
         for t in scheduled:
-            lines.append(f"  {fmt_todo(t, show_time=True)}")
+            lines.append(fmt_todo(t, show_due=True))
             shown_ids.add(t["id"])
         lines.append("")
 
     if today_no_time:
-        lines.append(f"📋 <b>На сегодня без времени ({len(today_no_time)}):</b>")
+        lines.append(f"📋 <b>На сегодня без времени — {len(today_no_time)}</b>")
         for t in today_no_time:
-            lines.append(f"  {fmt_todo(t)}")
+            lines.append(fmt_todo(t))
             shown_ids.add(t["id"])
         lines.append("")
 
     if anytime:
-        lines.append(f"📌 <b>Без даты ({len(anytime)}):</b>")
-        for t in anytime[:8]:
-            lines.append(f"  {fmt_todo(t)}")
+        lines.append(f"📌 <b>Без даты — {len(anytime)}</b>")
+        for t in anytime:
+            lines.append(fmt_todo(t))
             shown_ids.add(t["id"])
-        if len(anytime) > 8:
-            lines.append(f"  ...ещё {len(anytime)-8}")
 
     # По понедельникам — напоминание про важное-несрочное. Это тот квадрант,
     # который тихо проваливается: не горит, поэтому не делается никогда.
     if datetime.now().weekday() == 0:
         try:
             matrix = api_get("/todos/matrix")
-            plan = [t for t in (matrix["quadrants"].get("важное-несрочное") or [])
-                    if t["id"] not in shown_ids]
+            plan = sort_todos([t for t in (matrix["quadrants"].get("важное-несрочное") or [])
+                               if t["id"] not in shown_ids])
             unclassified = matrix["quadrants"].get("неклассифицировано") or []
             if plan:
                 lines.append("")
-                lines.append(f"🎯 <b>Важное, но несрочное ({len(plan)})</b> — то, что стоит планировать:")
-                for t in plan[:6]:
-                    lines.append(f"  {fmt_todo(t, show_quadrant=False)}")
-                if len(plan) > 6:
-                    lines.append(f"  ...ещё {len(plan)-6}")
+                lines.append(f"🎯 <b>Важное, но несрочное — {len(plan)}</b>, то, что стоит планировать")
+                for t in plan:
+                    lines.append(fmt_todo(t, show_quadrant=False))
             if unclassified:
                 lines.append("")
-                lines.append(f"❔ <b>Не разложено по матрице: {len(unclassified)}</b> — скажи боту, что важно и что срочно")
+                lines.append(f"❔ <b>Не разложено по матрице — {len(unclassified)}</b>, скажи боту, что важно и что срочно")
         except Exception as e:
             print(f"Matrix block skipped: {e}")
 
-    tg_send("\n".join(lines))
+    tg_send("\n".join(lines) + CHEATSHEET)
     print(f"Morning digest sent: {total} tasks for today, {len(anytime)} anytime.")
 
 
